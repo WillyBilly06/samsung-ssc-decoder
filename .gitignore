@@ -1,0 +1,14 @@
+# Build output (ESP-IDF projects and the host CMake build)
+/build/
+build/
+_build/
+
+# ESP-IDF generated per-project config (sdkconfig.defaults is the source of truth)
+firmware/native_bt/pure_sink/sdkconfig
+firmware/native_bt/pure_sink/sdkconfig.old
+examples/esp32_benchmark/sdkconfig
+examples/esp32_benchmark/sdkconfig.old
+
+__pycache__/
+.vscode/
+.idea/

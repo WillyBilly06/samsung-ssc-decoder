@@ -1,0 +1,8 @@
+# BDK SPEAKER pure_sink, 4 MB flash.
+# nvs/phy_init are identical to the existing layout, so Classic bonds survive.
+# No otadata partition: the bootloader always boots the factory app at 0x10000,
+# whatever an old otadata region (0x390000 in the previous 4 MB layout) says.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x6000,
+phy_init,   data, phy,     0xf000,   0x1000,
+factory,    app,  factory, 0x10000,  0x3F0000,
