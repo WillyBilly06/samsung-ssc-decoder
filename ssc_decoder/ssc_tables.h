@@ -1,4 +1,4 @@
-/* SSC mode tables dumped from libScalable_Encoder.so. */
+/* SSC mode tables (from Samsung's SSC encoder). */
 #ifndef SSC_TABLES_H
 #define SSC_TABLES_H
 extern const unsigned char SSC_LOG2_FRAC_TABLE[24];

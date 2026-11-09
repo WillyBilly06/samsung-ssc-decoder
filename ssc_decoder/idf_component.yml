@@ -1,0 +1,14 @@
+version: "1.0.0"
+description: "Samsung Scalable Codec (SSC) / Samsung Seamless Codec decoder: portable C99, all modes (44.1/48 kHz 16-bit, HiFi 48 kHz 24-bit, UHQ 96 kHz)"
+url: "https://github.com/WillyBilly06/samsung-ssc-decoder"
+license: "BSD-3-Clause"
+tags:
+  - audio
+  - codec
+  - decoder
+  - bluetooth
+  - a2dp
+  - ssc
+  - samsung
+dependencies:
+  idf: ">=5.0"

@@ -1,6 +1,6 @@
 # SSC bitstream specification
 
-This page describes the Samsung Scalable Codec (SSC) frame format as implemented by [`decoder/`](../decoder). It is
+This page describes the Samsung Scalable Codec (SSC) frame format as implemented by [`ssc_decoder/`](../ssc_decoder). It is
 written for someone building a decoder or encoder. Everything here was checked against Samsung's encoder: our
 decoder ends every frame at the same bit position the encoder wrote.
 
@@ -37,7 +37,7 @@ Two static modes exist. 48 kHz streams use the 44.1 kHz mode unchanged; only the
 
 `LM` is always 3 (8 short blocks). The band energy means (`eMeans`) are CELT's. Each mode has its own caps table,
 pulse cache and **two** 11 × 22 allocation-vector tables. Frames above 192 kbps use the second table. The tables
-are in [`decoder/ssc_tables.c`](../decoder/ssc_tables.c).
+are in [`ssc_decoder/ssc_tables.c`](../ssc_decoder/ssc_tables.c).
 
 ## Frame layout
 

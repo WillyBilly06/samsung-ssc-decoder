@@ -1,6 +1,6 @@
 /* SSC frame decoder: header parsing and the per-frame control flow.
  * Mirrors ssc_encode in libScalable_Encoder.so (opus 1.1 celt_encode_with_ec with Samsung changes);
- * see re/findings/E_encode_flow.md for the derivation of every condition below. */
+ * see docs/notes for the derivation of every condition below. */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>

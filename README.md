@@ -11,8 +11,8 @@ plus ESP32 speaker firmware that a Galaxy phone streams SSC to.**
 ![ESP-IDF 6.1](https://img.shields.io/badge/ESP--IDF-6.1-orange.svg)
 ![Bluetooth A2DP](https://img.shields.io/badge/Bluetooth-A2DP%20%2B%20AVRCP-0082FC.svg)
 
-[Quick start](#quick-start) · [Decoder API](#decoder-api) · [ESP32 speaker](#esp32-speaker-firmware) ·
-[Bitstream spec](docs/bitstream.md) · [A2DP details](docs/a2dp.md) · [FAQ](#faq)
+[Quick start](#quick-start) · [Decoder API](#decoder-api) · [Use it in ESP-IDF](docs/integration.md) ·
+[ESP32 speaker](#esp32-speaker-firmware) · [Bitstream spec](docs/bitstream.md) · [A2DP details](docs/a2dp.md) · [FAQ](#faq)
 
 </div>
 
@@ -35,7 +35,7 @@ plus ESP32 speaker firmware that a Galaxy phone streams SSC to.**
 flowchart LR
     phone["Galaxy phone<br/>Samsung SSC encoder"] -- "Bluetooth A2DP<br/>vendor codec 0x75 / 0x0103" --> bt
     subgraph esp["ESP32 (this repo)"]
-        bt["Bluetooth host stack<br/>AVDTP · AVRCP"] --> dec["SSC decoder<br/>decoder/"]
+        bt["Bluetooth host stack<br/>AVDTP · AVRCP"] --> dec["SSC decoder<br/>ssc_decoder/"]
         dec --> i2s["I2S output<br/>44.1 / 48 / 96 kHz"]
     end
     i2s --> dac["PCM5102A DAC"] --> spk(("Speaker"))
@@ -69,6 +69,31 @@ python examples/host_decode/compare.py test_vectors/input/mix.s16le out.s16le 2
 
 `out.s16le` is raw 16-bit stereo PCM, which you can play with
 `ffplay -f s16le -ar 44100 -ac 2 out.s16le`. More files in [test_vectors/](test_vectors).
+
+### Play SSC on an ESP32 (no Bluetooth)
+
+[`examples/esp32_playback`](examples/esp32_playback) decodes SSC from flash and plays it on a PCM5102A, cycling
+through 44.1 kHz, HiFi 48 kHz/24-bit and UHQ 96 kHz:
+
+```bash
+cd examples/esp32_playback
+idf.py set-target esp32
+idf.py -p PORT build flash monitor
+```
+
+### Add the decoder to your ESP-IDF project
+
+`ssc_decoder/` is an ESP-IDF component. Add it with the component manager:
+
+```yaml
+dependencies:
+  ssc_decoder:
+    git: https://github.com/WillyBilly06/samsung-ssc-decoder.git
+    path: ssc_decoder
+```
+
+Then `PRIV_REQUIRES ssc_decoder`. The full guide, including feeding it from an A2DP sink, is in
+[docs/integration.md](docs/integration.md).
 
 ### Build the ESP32 speaker
 
@@ -104,7 +129,7 @@ ssc_decoder_destroy(dec);
 | `ssc_parse_frame_info()` | Bitrate, sequence number and coded bands from a frame header |
 | `ssc_decoder_reset()` | Clear history after a gap in the stream |
 
-Full reference: [decoder/README.md](decoder/README.md).
+Full reference: [ssc_decoder/README.md](ssc_decoder/README.md).
 
 ## ESP32 speaker firmware
 
@@ -154,9 +179,10 @@ Decoding real frames on an ESP32 at 240 MHz (one core):
 ## Repository layout
 
 ```
-decoder/               SSC decoder library (C99)
+ssc_decoder/           SSC decoder library (C99), also an ESP-IDF component
 examples/
   host_decode/         PC tool: .ssc file -> PCM, plus an SNR check
+  esp32_playback/      ESP32: decode SSC from flash and play it over I2S
   esp32_benchmark/     times the decoder on an ESP32
 firmware/
   native_bt/pure_sink/ ESP32 Bluetooth speaker firmware

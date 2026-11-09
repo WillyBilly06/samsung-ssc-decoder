@@ -1,5 +1,5 @@
 /* Part of the SSC decoder. Derived from libopus 1.1 (BSD license, see COPYING.opus) and from
- * reverse engineering of libScalable_Encoder.so; see re/findings for the analysis. */
+ * analysis of Samsung's SSC encoder; see docs/notes for the format notes. */
 #include "ssc_tables.h"
 
 /* LOG2_FRAC_TABLE @0x5df0 (identical to CELT rate.c) */

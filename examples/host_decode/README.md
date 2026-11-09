@@ -15,7 +15,7 @@ cmake --build build
 Or without CMake:
 
 ```bash
-cc -O2 -DSSC_DEBUG_TELL -Idecoder decoder/*.c examples/host_decode/ssc_dec_tool.c -lm -o ssc_dec_tool
+cc -O2 -DSSC_DEBUG_TELL -Issc_decoder ssc_decoder/*.c examples/host_decode/ssc_dec_tool.c -lm -o ssc_dec_tool
 ```
 
 ## Decode

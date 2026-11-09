@@ -8,7 +8,7 @@ the overall firmware architecture (tasks, buffering, drift handling, pairing) se
 
 | File | Role |
 |---|---|
-| [`decoder/`](../decoder) | The decoder library (shared with the host tools) |
+| [`ssc_decoder/`](../ssc_decoder) | The decoder library (shared with the host tools) |
 | [`firmware/native_bt/codecs/ssc/dbt_ssc_codec.c`](../firmware/native_bt/codecs/ssc/dbt_ssc_codec.c) | Codec adapter: A2DP configuration, packet splitting, decoder lifetime |
 | [`firmware/native_bt/esp32_probe/components/ssc_decoder/`](../firmware/native_bt/esp32_probe/components/ssc_decoder) | ESP-IDF component that builds the two above |
 | [`firmware/native_bt/pure_sink/main/a2dp_sink.c`](../firmware/native_bt/pure_sink/main/a2dp_sink.c) | Registers the SSC endpoint and capability `… 03 01 3E` |

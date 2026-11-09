@@ -1,5 +1,5 @@
 # Benchmarks the SSC decoder on the ESP32 with real frames from Samsung's encoder.
-set(dec "${CMAKE_CURRENT_LIST_DIR}/../../../decoder")
+set(dec "${CMAKE_CURRENT_LIST_DIR}/../../../ssc_decoder")
 get_filename_component(dec "${dec}" ABSOLUTE)
 idf_component_register(SRCS "bench.c"
     "${dec}/ssc_alloc.c" "${dec}/ssc_bands.c" "${dec}/ssc_cwrs.c" "${dec}/ssc_decoder.c" "${dec}/ssc_ec.c"

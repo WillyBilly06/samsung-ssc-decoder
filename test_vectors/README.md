@@ -21,9 +21,9 @@ test signals in `input/`. Use them to test a decoder without a phone.
 |---|---|---|---|
 | `mix_<bitrate>.ssc` | `mix.s16le` | 44.1 kHz, 16-bit, every bitrate from 88 000 to 886 000 | `44100` |
 | `mix24_<bitrate>.ssc` | `mix.s16le` | 44.1 kHz, 24-bit input path | `44100` |
-| `mix48_192000.ssc` | `mix48k.s16le` | 48 kHz, 16-bit | `48000` |
+| `mix48_192000.ssc` | `mix.s16le` | 48 kHz encoder setting, 16-bit (44.1 kHz input) | `48000` |
 | `hifi48_192000.ssc` | `mix48k.s16le` | HiFi: 48 kHz, 24-bit | `48000` |
-| `mix96_192000.ssc` | `mix96k.s16le` | 96 kHz mode, 192 kbps | `96000` |
+| `mix96_192000.ssc` | `mix.s16le` | 96 kHz mode, 192 kbps (44.1 kHz input) | `96000` |
 | `uhq96_291000.ssc`, `uhq96_584000.ssc` | `mix96k.s16le` | UHQ v2: 96 kHz, 24-bit | `96000` |
 | `sine_<bitrate>.ssc` | `sine.s16le` | 44.1 kHz, 16-bit | `44100` |
 | `mono_192000.ssc` | `mono.s16le` | mono input | `44100` |

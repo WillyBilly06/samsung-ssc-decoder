@@ -11,7 +11,7 @@ endif()
 get_filename_component(workspace "${CMAKE_CURRENT_LIST_DIR}/../../../.." ABSOLUTE)
 set(owned "${workspace}/native_bt/codecs/ssc")
 # The decoder library lives at the repository root (decoder/), shared with the examples.
-get_filename_component(decoder "${workspace}/../decoder" ABSOLUTE)
+get_filename_component(decoder "${workspace}/../ssc_decoder" ABSOLUTE)
 set(ssc_units
     "${decoder}/ssc_alloc.c"
     "${decoder}/ssc_bands.c"

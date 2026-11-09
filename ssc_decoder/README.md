@@ -20,7 +20,8 @@ Portable C99 decoder for Samsung Scalable Codec / Samsung Seamless Codec frames.
 
 ## Use it in your project
 
-Add the `.c` files to your build and put this folder on the include path. Recommended flags for speed:
+**ESP-IDF:** this folder is a component named `ssc_decoder`, see [../docs/integration.md](../docs/integration.md).
+**CMake:** `add_subdirectory(ssc_decoder)` and link `sscdec`. **Anything else:** add the `.c` files to your build and put this folder on the include path. Recommended flags for speed:
 `-O2 -fno-math-errno`, plus `-fsingle-precision-constant` on MCUs with a single-precision FPU.
 
 ```c

@@ -4,6 +4,7 @@
 |---|---|
 | [bitstream.md](bitstream.md) | **SSC frame format**: header, bitrates and frame sizes, symbol order, differences from Opus CELT |
 | [a2dp.md](a2dp.md) | **SSC over Bluetooth**: codec element, flags, what to advertise, phone rules, packets, bitrate adaptation |
+| [integration.md](integration.md) | **Use it in your project**: ESP-IDF component, decode loop, feeding it from an A2DP sink |
 | [esp32-sink.md](esp32-sink.md) | **ESP32 firmware**: how SSC is plugged in, memory, CPU, console output |
 
 ## Research notes

@@ -12,3 +12,5 @@ examples/esp32_benchmark/sdkconfig.old
 __pycache__/
 .vscode/
 .idea/
+examples/esp32_playback/sdkconfig
+examples/esp32_playback/sdkconfig.old
