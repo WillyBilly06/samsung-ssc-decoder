@@ -34,7 +34,10 @@ static const unsigned char spread_icdf[4] = {25, 23, 2, 0};
 static const unsigned char trim_icdf[11] = {126, 124, 119, 109, 87, 41, 19, 9, 4, 2, 0};
 static const signed char tf_select_table_LM3[8] = {0, -2, 0, -3, 3, 0, 1, -1};
 
-/* The state is split into blocks of at most ~15 KB so it fits a fragmented heap (no PSRAM on the ESP32). */
+/* The state is 3 blocks of ~8 KB (this struct, with the per-frame scratch) and ~7.4 KB (one postfilter
+ * per channel), so it fits a fragmented heap (no PSRAM on the ESP32). Only the postfilter history, the
+ * MDCT overlap and the energies persist across frames; the band shapes and spectra are decoded straight
+ * into the frame part of each channel's postfilter buffer, and every other temporary is in `scratch`. */
 struct ssc_decoder {
     int is96k;
     const ssc_alloc_mode *am;
@@ -44,14 +47,15 @@ struct ssc_decoder {
     float oldLogE[C * NB], oldLogE2[C * NB];
     float ola[C][108];
     unsigned char collapse_masks[C * NB];
-    float *X;                    /* C*N: decoded shape, then denormalised in place */
-    ssc_qab_work *qab;
-    ssc_imdct_state *imdct;
-    ssc_postfilter_state *pf[C]; /* also holds each channel's output frame */
+    int out_valid;               /* the frame part of pf[] holds a good decoded frame */
+    ssc_postfilter_state *pf[C]; /* also holds each channel's band shapes, spectrum and output frame */
     ssc_alloc_fn alloc;
     ssc_free_fn release;
     void *alloc_ctx;
+    ssc_scratch scratch;         /* per-frame only; lent out between frames (ssc_output_buffer) */
 };
+
+typedef char ssc_output_fits[sizeof(ssc_scratch) >= SSC_OUTPUT_BYTES ? 1 : -1];
 
 int ssc_parse_frame_info(const uint8_t *f, int len, ssc_frame_info *h) {
     static const int frate[7] = {88000, 96000, 128000, 192000, 229000, 328000, 256000};
@@ -76,8 +80,7 @@ int ssc_parse_frame_info(const uint8_t *f, int len, ssc_frame_info *h) {
 }
 
 int ssc_decoder_size(void) {
-    return (int)(sizeof(ssc_decoder) + sizeof(float) * C * N + sizeof(ssc_qab_work) + sizeof(ssc_imdct_state) +
-                 C * sizeof(ssc_postfilter_state));
+    return (int)(sizeof(ssc_decoder) + C * sizeof(ssc_postfilter_state));
 }
 
 void ssc_decoder_reset(ssc_decoder *st) {
@@ -86,8 +89,7 @@ void ssc_decoder_reset(ssc_decoder *st) {
     memset(st->oldBandE, 0, sizeof st->oldBandE);
     for (i = 0; i < C * NB; i++) st->oldLogE[i] = st->oldLogE2[i] = -28.f;
     memset(st->ola, 0, sizeof st->ola);
-    memset(st->qab, 0, sizeof *st->qab);
-    ssc_imdct_init(st->imdct);
+    st->out_valid = 0;
     for (c = 0; c < C; c++) ssc_postfilter_init(st->pf[c]);
 }
 
@@ -106,9 +108,6 @@ void ssc_decoder_destroy(ssc_decoder *st) {
     if (!st) return;
     for (c = 0; c < C; c++)
         if (st->pf[c]) st->release(st->alloc_ctx, st->pf[c]);
-    if (st->imdct) st->release(st->alloc_ctx, st->imdct);
-    if (st->qab) st->release(st->alloc_ctx, st->qab);
-    if (st->X) st->release(st->alloc_ctx, st->X);
     st->release(st->alloc_ctx, st);
 }
 
@@ -124,10 +123,7 @@ ssc_decoder *ssc_decoder_create_with_allocator(int sample_rate, ssc_alloc_fn all
     st->alloc = alloc;
     st->release = release;
     st->alloc_ctx = ctx;
-    st->X = (float *)alloc(ctx, sizeof(float) * C * N);
-    st->qab = (ssc_qab_work *)alloc(ctx, sizeof(ssc_qab_work));
-    st->imdct = (ssc_imdct_state *)alloc(ctx, sizeof(ssc_imdct_state));
-    ok = st->X && st->qab && st->imdct;
+    ok = 1;
     for (c = 0; c < C; c++) {
         st->pf[c] = (ssc_postfilter_state *)alloc(ctx, sizeof(ssc_postfilter_state));
         ok = ok && st->pf[c];
@@ -152,6 +148,7 @@ ssc_decoder *ssc_decoder_create(int sample_rate) {
 
 /* Decodes into each channel's postfilter buffer (864 samples, 16-bit PCM units). */
 static int decode_frame(ssc_decoder *st, const uint8_t *frame, int len) {
+    float *X = ssc_postfilter_buffer(st->pf[0]), *Y = ssc_postfilter_buffer(st->pf[1]);
     const short *eBands = st->am->eBands;
     ssc_frame_info h;
     ec_dec dec;
@@ -164,6 +161,7 @@ static int decode_frame(ssc_decoder *st, const uint8_t *frame, int len) {
     float logE[C * NB];
 
     PROF(0);
+    st->out_valid = 0;
     if (ssc_parse_frame_info(frame, len, &h)) return -1;
     end = h.end_band;
     payload = len - 4;
@@ -275,10 +273,12 @@ static int decode_frame(ssc_decoder *st, const uint8_t *frame, int len) {
     PROF(2); /* tf, spread, dynalloc, trim, allocation */
     ssc_unquant_fine_energy(NB, 0, end, st->oldBandE, fine_quant, &dec, C);
 
-    memset(st->X, 0, sizeof(float) * C * N);
-    ssc_quant_all_bands_dec(&st->bm, end, st->X, st->collapse_masks, pulses, shortBlocks, spread, dual_stereo,
+    /* The frame part of the postfilter buffers is free here: the previous frame is also in the history. */
+    memset(X, 0, sizeof(float) * N);
+    memset(Y, 0, sizeof(float) * N);
+    ssc_quant_all_bands_dec(&st->bm, end, X, Y, st->collapse_masks, pulses, shortBlocks, spread, dual_stereo,
                             intensity, tf_res, total_bits8 - anti_collapse_rsv, balance, &dec, codedBands,
-                            &st->rng, st->qab);
+                            &st->rng, &st->scratch.qab);
 
     PROF(3); /* fine energy + band shapes (PVQ) */
     if (anti_collapse_rsv > 0) anti_collapse_on = (int)ec_dec_bits(&dec, 1);
@@ -289,18 +289,18 @@ static int decode_frame(ssc_decoder *st, const uint8_t *frame, int len) {
     for (i = 0; i < C * NB; i++) logE[i] = st->oldBandE[i] * (1.f / (1 << DB_SHIFT));
 
     if (anti_collapse_on)
-        ssc_anti_collapse(&st->bm, st->X, st->collapse_masks, 0, end, logE, st->oldLogE, st->oldLogE2, pulses,
+        ssc_anti_collapse(&st->bm, X, Y, st->collapse_masks, 0, end, logE, st->oldLogE, st->oldLogE2, pulses,
                           st->rng);
 
     PROF(4); /* finalise + anti-collapse */
     for (c = 0; c < C; c++) {
-        float *freq = st->X + c * N; /* denormalised in place */
+        float *freq = c ? Y : X; /* denormalised in place, then replaced by the time signal */
         if (silence)
             memset(freq, 0, sizeof(float) * N);
         else
             ssc_denormalise_bands(eBands, freq, freq, logE + c * NB, 0, end);
         PROF(5); /* denormalise */
-        ssc_synthesis_frame(st->imdct, freq, shortBlocks, st->ola[c], ssc_postfilter_buffer(st->pf[c]));
+        ssc_synthesis_frame(st->scratch.synth, freq, shortBlocks, st->ola[c]);
         PROF(6); /* IMDCT + overlap-add */
         ssc_postfilter_run(st->pf[c], pf_on, pf_T, pf_qg);
         PROF(7); /* postfilter */
@@ -327,23 +327,9 @@ static int decode_frame(ssc_decoder *st, const uint8_t *frame, int len) {
     ssc_debug_storage_bits = (int)dec.storage * 8;
 #endif
     st->rng = dec.rng;
-    return dec.error ? -2 : 0;
-}
-
-int ssc_decode_float(ssc_decoder *st, const uint8_t *frame, int len, float *pcm) {
-    int i, ret = decode_frame(st, frame, len);
-    if (ret < 0) {
-        memset(pcm, 0, sizeof(float) * 2 * N);
-        return ret;
-    }
-    {
-        const float *l = ssc_postfilter_buffer(st->pf[0]), *r = ssc_postfilter_buffer(st->pf[1]);
-        for (i = 0; i < N; i++) {
-            pcm[2 * i] = l[i] * (1.f / 32768.f);
-            pcm[2 * i + 1] = r[i] * (1.f / 32768.f);
-        }
-    }
-    return N;
+    if (dec.error) return -2;
+    st->out_valid = 1;
+    return 0;
 }
 
 int ssc_frame_bytes(const uint8_t *frame, int avail, int sample_rate) {
@@ -359,40 +345,113 @@ int ssc_frame_bytes(const uint8_t *frame, int avail, int sample_rate) {
     return base - 1 + 4;
 }
 
-int ssc_decode_s32(ssc_decoder *st, const uint8_t *frame, int len, int32_t *pcm) {
-    int i, c, ret = decode_frame(st, frame, len);
-    if (ret < 0) {
-        memset(pcm, 0, sizeof(int32_t) * 2 * N);
-        return ret;
-    }
-    for (c = 0; c < C; c++) {
-        const float *x = ssc_postfilter_buffer(st->pf[c]);
-        for (i = 0; i < N; i++) {
-            float v = x[i] * 65536.f;
-            pcm[2 * i + c] = v >= 2147483520.f ? INT32_MAX : v <= -2147483648.f ? INT32_MIN : (int32_t)lrintf(v);
-        }
-    }
-    return N;
+/* lrintf() in the default rounding mode (nearest, ties to even) for |v| < 2^22, without a libm call (lrintf
+ * is a library call on the ESP32). Adding 1.5 * 2^23 rounds v to an integer in the low mantissa bits. */
+static inline int32_t rint_small(float v) {
+    union { float f; uint32_t u; } t;
+    t.f = v + 12582912.f;
+    return (int32_t)(t.u - 0x4B400000u);
+}
+
+/* Same as lrintf() for |v| < 2^31. At or above 2^22 a float is a multiple of 0.5, so truncation plus a
+ * ties-to-even fix-up is exact. */
+static inline int32_t rint_s32(float v) {
+    int32_t i;
+    float f;
+    if (v < 4194304.f && v > -4194304.f) return rint_small(v);
+    i = (int32_t)v;
+    f = v - (float)i; /* exact: 0 or +-0.5 */
+    if (f == 0.5f) i += i & 1;
+    else if (f == -0.5f) i -= i & 1;
+    return i;
 }
 
 static int16_t to_s16(float v) {
     if (v > 32767.f) return 32767;
     if (v < -32768.f) return -32768;
-    return (int16_t)lrintf(v);
+    return (int16_t)rint_small(v);
+}
+
+static int32_t to_s32(float x) {
+    float v = x * 65536.f;
+    return v >= 2147483520.f ? INT32_MAX : v <= -2147483648.f ? INT32_MIN : rint_s32(v);
+}
+
+int ssc_decode_frame(ssc_decoder *st, const uint8_t *frame, int len) {
+    int ret = decode_frame(st, frame, len);
+    return ret < 0 ? ret : N;
+}
+
+void *ssc_output_buffer(ssc_decoder *st) { return &st->scratch; }
+
+/* Shared range check: 0 <= offset, 0 <= count, offset + count <= 864. */
+static int read_range(int offset, int count) { return offset >= 0 && count >= 0 && count <= N - offset; }
+
+int ssc_read_s16(ssc_decoder *st, int offset, int count, int16_t *pcm) {
+    const float *l, *r;
+    int i;
+    if (!read_range(offset, count)) return -1;
+    l = ssc_postfilter_buffer(st->pf[0]) + offset;
+    r = ssc_postfilter_buffer(st->pf[1]) + offset;
+    if (!st->out_valid) {
+        memset(pcm, 0, sizeof(int16_t) * 2 * (size_t)count);
+        return count;
+    }
+    for (i = 0; i < count; i++) {
+        pcm[2 * i] = to_s16(l[i]);
+        pcm[2 * i + 1] = to_s16(r[i]);
+    }
+    return count;
+}
+
+int ssc_read_s32(ssc_decoder *st, int offset, int count, int32_t *pcm) {
+    const float *l, *r;
+    int i;
+    if (!read_range(offset, count)) return -1;
+    l = ssc_postfilter_buffer(st->pf[0]) + offset;
+    r = ssc_postfilter_buffer(st->pf[1]) + offset;
+    if (!st->out_valid) {
+        memset(pcm, 0, sizeof(int32_t) * 2 * (size_t)count);
+        return count;
+    }
+    for (i = 0; i < count; i++) {
+        pcm[2 * i] = to_s32(l[i]);
+        pcm[2 * i + 1] = to_s32(r[i]);
+    }
+    return count;
+}
+
+int ssc_read_float(ssc_decoder *st, int offset, int count, float *pcm) {
+    const float *l, *r;
+    int i;
+    if (!read_range(offset, count)) return -1;
+    l = ssc_postfilter_buffer(st->pf[0]) + offset;
+    r = ssc_postfilter_buffer(st->pf[1]) + offset;
+    if (!st->out_valid) {
+        memset(pcm, 0, sizeof(float) * 2 * (size_t)count);
+        return count;
+    }
+    for (i = 0; i < count; i++) {
+        pcm[2 * i] = l[i] * (1.f / 32768.f);
+        pcm[2 * i + 1] = r[i] * (1.f / 32768.f);
+    }
+    return count;
 }
 
 int ssc_decode(ssc_decoder *st, const uint8_t *frame, int len, int16_t *pcm) {
-    int i, ret = decode_frame(st, frame, len);
-    if (ret < 0) {
-        memset(pcm, 0, sizeof(int16_t) * 2 * N);
-        return ret;
-    }
-    {
-        const float *l = ssc_postfilter_buffer(st->pf[0]), *r = ssc_postfilter_buffer(st->pf[1]);
-        for (i = 0; i < N; i++) {
-            pcm[2 * i] = to_s16(l[i]);
-            pcm[2 * i + 1] = to_s16(r[i]);
-        }
-    }
-    return N;
+    int ret = ssc_decode_frame(st, frame, len);
+    ssc_read_s16(st, 0, N, pcm); /* silence on error */
+    return ret;
+}
+
+int ssc_decode_s32(ssc_decoder *st, const uint8_t *frame, int len, int32_t *pcm) {
+    int ret = ssc_decode_frame(st, frame, len);
+    ssc_read_s32(st, 0, N, pcm);
+    return ret;
+}
+
+int ssc_decode_float(ssc_decoder *st, const uint8_t *frame, int len, float *pcm) {
+    int ret = ssc_decode_frame(st, frame, len);
+    ssc_read_float(st, 0, N, pcm);
+    return ret;
 }

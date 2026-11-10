@@ -57,7 +57,7 @@ int  ssc_decoder_size(void);
 ```
 
 * `sample_rate`: `44100` or `48000` (both use the 44.1 kHz codec mode), or `96000`.
-* The decoder allocates 6 blocks (about 44 KB in total, the largest about 15 KB) and nothing else.
+* The decoder allocates 3 blocks (22,920 bytes in total, the largest about 7.8 KB) and nothing else.
   `ssc_decoder_size()` returns the total. Pass your own `alloc`/`release` to place them in a specific heap.
 * `ssc_decoder_reset()` clears history. Use it after lost packets or a stream restart.
 
@@ -75,6 +75,21 @@ int ssc_decode_float(ssc_decoder *dec, const uint8_t *frame, int len, float   *p
 * `ssc_decode_s32` scales 16-bit full scale to `1 << 31` and keeps the extra precision of the 24-bit modes.
   `ssc_decode_float` outputs `[-1, 1)`.
 * Output lags input by 108 samples.
+
+### Decode without a PCM buffer
+
+```c
+int   ssc_decode_frame(ssc_decoder *dec, const uint8_t *frame, int len);   /* decode, keep the frame inside */
+int   ssc_read_s16  (ssc_decoder *dec, int offset, int count, int16_t *pcm);
+int   ssc_read_s32  (ssc_decoder *dec, int offset, int count, int32_t *pcm);
+int   ssc_read_float(ssc_decoder *dec, int offset, int count, float   *pcm);
+void *ssc_output_buffer(ssc_decoder *dec);                                /* SSC_OUTPUT_BYTES of idle scratch */
+```
+
+`ssc_decode*` is `ssc_decode_frame` followed by one `ssc_read_*` of the whole frame. For tight memory, decode with
+`ssc_decode_frame` and read the frame in pieces (any offset and size) straight into your output buffer, or into
+`ssc_output_buffer()`: 3,456 bytes of decoder scratch that are idle between frames (one whole frame of int16
+stereo, half a frame of int32). The ESP32 firmware does this, so it needs no frame-sized PCM copy.
 
 ### Frame helpers
 

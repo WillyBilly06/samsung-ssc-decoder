@@ -63,11 +63,12 @@ typedef struct {
     float lowband_scratch[144];   /* largest band: 18*8 */
 } ssc_qab_work;
 
-void ssc_quant_all_bands_dec(const ssc_band_mode *m, int end, float *X_,
+/* X_, Y_: the two channels' shapes (864 floats each, need not be adjacent). */
+void ssc_quant_all_bands_dec(const ssc_band_mode *m, int end, float *X_, float *Y_,
                              unsigned char *collapse_masks, const int *pulses, int shortBlocks, int spread,
                              int dual_stereo, int intensity, const int *tf_res, int32_t total_bits,
                              int32_t balance, ec_dec *ec, int codedBands, uint32_t *seed, ssc_qab_work *ws);
-void ssc_anti_collapse(const ssc_band_mode *m, float *X_, const unsigned char *collapse_masks,
+void ssc_anti_collapse(const ssc_band_mode *m, float *X_, float *Y_, const unsigned char *collapse_masks,
                        int start, int end, const float *logE, const float *prev1logE,
                        const float *prev2logE, const int *pulses, uint32_t seed);
 
@@ -78,12 +79,22 @@ extern const ssc_cpx ssc_fft_tw[432];
 extern const ssc_cpx ssc_pre_long[432], ssc_post_long[432];
 extern const ssc_cpx ssc_pre_short[54], ssc_post_short[54];
 
-typedef struct {
-    ssc_cpx a[432], b[432];
-    float y[864 + 108];
-    float u[864];
-} ssc_imdct_state;
+/* Per-frame scratch, shared by the band decoder and the synthesis (nothing in it survives a frame):
+ *   band decode: ssc_qab_work (folding memory)                                       1584 floats
+ *   long IMDCT : FFT input, then the DCT-IV output (the FFT output goes to the frame) 864 floats
+ *   short IMDCT: 972 overlap-add accumulator + 3 x 108 per-block buffers            1296 floats
+ * Between frames it is unused; ssc_output_buffer() lends it to the caller (SSC_OUTPUT_BYTES). */
+#define SSC_SYNTH_SCRATCH_FLOATS (864 + 108 + 3 * 108)
+typedef union {
+    ssc_qab_work qab;
+    float synth[SSC_SYNTH_SCRATCH_FLOATS];
+    double align_;
+} ssc_scratch;
 
+/* hist[0 .. 1026): past output (the comb filter looks back up to 1024+2 samples).
+ * hist[1026 .. 1890): the current frame. During decode it first holds this channel's band shapes / MDCT
+ * spectrum (the previous frame there is already duplicated in the history), then the synthesised and
+ * postfiltered output, which stays readable until the next decode. */
 typedef struct {
     float hist[1026 + 864];
     int T_old;
@@ -95,8 +106,8 @@ extern const float ssc_eMeans[25];
 
 void ssc_denormalise_bands(const short *eBands, const float *X, float *freq, const float *logE,
                            int start, int end);
-void ssc_imdct_init(ssc_imdct_state *st);
-void ssc_synthesis_frame(ssc_imdct_state *st, const float *freq, int shortBlocks, float *ola_mem, float *out);
+/* io: in = 864 MDCT coefficients, out = 864 time samples (before postfilter). scratch: SSC_SYNTH_SCRATCH_FLOATS. */
+void ssc_synthesis_frame(float *scratch, float *io, int shortBlocks, float *ola_mem);
 void ssc_postfilter_init(ssc_postfilter_state *pf);
 float *ssc_postfilter_buffer(ssc_postfilter_state *pf);
 void ssc_postfilter_run(ssc_postfilter_state *pf, int pf_on, int T, int qg);

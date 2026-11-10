@@ -12,7 +12,7 @@
 #define SSC_NBANDS        22
 #define SSC_LM            3
 #define SSC_M             8          /* 1<<LM */
-#define SSC_NFREQ         864        /* per-channel stride of X (Y = X + 864) */
+#define SSC_NFREQ         864        /* coefficients per channel */
 #define SSC_BITRES        3
 #define SSC_QTHETA_OFFSET 4
 #define SSC_QTHETA_OFFSET_TWOPHASE 16 /* unreachable (N>=8) */
@@ -46,7 +46,7 @@ typedef struct {
 
 static int ssc_imin(int a, int b) { return a < b ? a : b; }
 static int ssc_imax(int a, int b) { return a > b ? a : b; }
-static int ssc_ilog(uint32_t x) { int r = 0; while (x) { r++; x >>= 1; } return r; } /* EC_ILOG */
+#define ssc_ilog(x) ssc_ilog32(x) /* EC_ILOG */
 
 /* ---------------------------------------------------------------------- */
 /* Integer helpers (bit-exact, they drive the bit allocation)              */
@@ -668,18 +668,17 @@ typedef struct {
 } ssc_qab_work_unused;
 #endif
 
-/* X_: 2*864 floats (Y_ = X_+864), zeroed by the caller beforehand.
+/* X_, Y_: 864 floats per channel, zeroed by the caller beforehand.
  * collapse_masks: 2*22 bytes.
  * total_bits = (nbBytes*8 << BITRES) - anti_collapse_rsv (nbBytes = range-coded payload bytes).
  * end = 22 - k (see C_bands_pvq.md / header analysis). seed: decoder st->rng (in/out). */
-void ssc_quant_all_bands_dec(const ssc_band_mode *m, int end, float *X_,
+void ssc_quant_all_bands_dec(const ssc_band_mode *m, int end, float *X_, float *Y_,
       unsigned char *collapse_masks, const int *pulses, int shortBlocks, int spread,
       int dual_stereo, int intensity, const int *tf_res, int32_t total_bits, int32_t balance,
       ec_dec *ec, int codedBands, uint32_t *seed, ssc_qab_work *ws)
 {
    const short *eBands = m->eBands;
    const int M = SSC_M, LM = SSC_LM, C = 2;
-   float *Y_ = X_ + SSC_NFREQ;
    float *norm = ws->norm;
    float *norm2 = ws->norm + M * eBands[SSC_NBANDS - 1];
    int B = shortBlocks ? M : 1;
@@ -780,11 +779,11 @@ void ssc_quant_all_bands_dec(const ssc_band_mode *m, int end, float *X_,
 /*        oldBandE, oldLogE, oldLogE2, pulses, seed_after_quant_all_bands); */
 /* logE arrays: [2*22], log2 units (opus float convention: 1.0 = 6.02 dB).  */
 /* ---------------------------------------------------------------------- */
-void ssc_anti_collapse(const ssc_band_mode *m, float *X_, const unsigned char *collapse_masks,
+void ssc_anti_collapse(const ssc_band_mode *m, float *X_, float *Y_, const unsigned char *collapse_masks,
       int start, int end, const float *logE, const float *prev1logE, const float *prev2logE,
       const int *pulses, uint32_t seed)
 {
-   const int LM = SSC_LM, C = 2, size = SSC_NFREQ;
+   const int LM = SSC_LM, C = 2;
    int c, i, j, k;
    for (i = start; i < end; i++) {
       int N0 = m->eBands[i + 1] - m->eBands[i];
@@ -804,7 +803,7 @@ void ssc_anti_collapse(const ssc_band_mode *m, float *X_, const unsigned char *c
             r *= 1.41421356f;
          if (r > thresh) r = thresh;
          r = r * sqrt_1;
-         X = X_ + c * size + (m->eBands[i] << LM);
+         X = (c ? Y_ : X_) + (m->eBands[i] << LM);
          for (k = 0; k < 1 << LM; k++) {
             if (!(collapse_masks[i * C + c] & 1 << k)) {
                for (j = 0; j < N0; j++) {

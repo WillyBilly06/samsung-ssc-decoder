@@ -15,6 +15,15 @@
 #define SSC_FLAG_UHQ2 0x02u
 #define SSC_FLAG_NO_UHQ2 0x01u
 
+/* The adapter owns no PCM buffer. A decoded frame stays inside the decoder (its postfilter buffers) and is
+ * converted piecewise into ssc_output_buffer(), decoder memory that is idle between frames. S16: the whole
+ * frame (3456 bytes) is one view; S32: two views of 432 frames. The view is borrowed by the worker after a
+ * PENDING pcm() until resume/reset/close, and the next piece or frame is only produced from resume(). */
+#define SSC_VIEW_FRAMES(bytes) ((uint16_t)(SSC_OUTPUT_BYTES / (2u * (bytes))))
+_Static_assert(SSC_FRAME_SAMPLES == DBT_SSC_FRAME_SAMPLES, "SSC frame size");
+_Static_assert(DBT_SSC_FRAME_SAMPLES % (SSC_OUTPUT_BYTES / 8u) == 0 && DBT_SSC_FRAME_SAMPLES % (SSC_OUTPUT_BYTES / 4u) == 0,
+               "SSC views must split a frame evenly");
+
 typedef struct {
     ssc_decoder *codec;
     /* Packet being decoded. 96 kHz packets may carry two frames; each decoded frame is emitted on its own and
@@ -22,11 +31,7 @@ typedef struct {
     const uint8_t *packet;
     uint32_t timestamp;
     uint16_t size, pos, index;
-    /* Borrowed by the worker after a PENDING pcm() until resume/reset/close. S16 or S32 stereo. */
-    union {
-        int16_t s16[DBT_SSC_FRAME_SAMPLES * 2u];
-        int32_t s32[DBT_SSC_FRAME_SAMPLES * 2u];
-    } pcm;
+    uint16_t emitted; /* frames of the current decoded frame already emitted; 0 = decode the next frame */
 } ssc_state_t;
 
 static void copy(void *to, const void *from, unsigned n) {
@@ -105,14 +110,14 @@ uint32_t dbt_ssc_packet_frames(const dbt_codec_config_t *config, const dbt_avdtp
 }
 
 /* Decoder memory goes through the worker's accounted allocator, so it only exists while an SSC stream is
- * open and is charged to the codec. The library allocates 6 blocks of at most ~15 KB (fragmented heap);
+ * open and is charged to the codec. The library allocates 3 blocks of at most ~8 KB (fragmented heap);
  * all of its tables are const and stay in flash. */
 static void *ssc_alloc(void *ctx, unsigned size) { return dbt_codec_allocate((dbt_codec_decoder_t *)ctx, size); }
 static void ssc_free(void *ctx, void *ptr) { dbt_codec_release((dbt_codec_decoder_t *)ctx, ptr); }
 
 static void clear_packet(ssc_state_t *s) {
     s->packet = 0;
-    s->size = s->pos = s->index = 0;
+    s->size = s->pos = s->index = s->emitted = 0;
 }
 
 static void close_decoder(dbt_codec_decoder_t *d) {
@@ -146,40 +151,43 @@ static dbt_result_t reset_decoder(dbt_codec_decoder_t *d) {
     return DBT_OK;
 }
 
-/* Decode and emit frames of the current packet until done or the PCM view is borrowed (PENDING). */
+/* Decode and emit the frames of the current packet, one view at a time, until done or a view is borrowed
+ * (PENDING). */
 static dbt_result_t resume(dbt_codec_decoder_t *d, uint32_t now) {
     (void)now;
     ssc_state_t *s = d->state;
     if (!s) return DBT_INVALID;
-    while (s->packet && s->pos < s->size) {
-        const uint8_t *f = s->packet + s->pos;
-        int n = ssc_frame_bytes(f, (int)(s->size - s->pos), decoder_rate(&d->config));
-        int r;
-        const void *view;
-        if (n <= 0) {
+    const bool wide = d->config.sample_bytes == 4;
+    const uint16_t chunk = SSC_VIEW_FRAMES(wide ? 4u : 2u);
+    while (s->packet && (s->emitted || s->pos < s->size)) {
+        if (!s->emitted) {
+            const uint8_t *f = s->packet + s->pos;
+            int n = ssc_frame_bytes(f, (int)(s->size - s->pos), decoder_rate(&d->config));
+            if (n <= 0 || ssc_decode_frame(s->codec, f, n) != (int)DBT_SSC_FRAME_SAMPLES) {
+                clear_packet(s);
+                return DBT_INVALID;
+            }
+            s->pos = (uint16_t)(s->pos + n);
+        }
+        void *view = ssc_output_buffer(s->codec);
+        int r = wide ? ssc_read_s32(s->codec, s->emitted, chunk, (int32_t *)view)
+                     : ssc_read_s16(s->codec, s->emitted, chunk, (int16_t *)view);
+        if (r != (int)chunk) {
             clear_packet(s);
             return DBT_INVALID;
         }
-        if (d->config.sample_bytes == 4) {
-            r = ssc_decode_s32(s->codec, f, n, s->pcm.s32);
-            view = s->pcm.s32;
-        } else {
-            r = ssc_decode(s->codec, f, n, s->pcm.s16);
-            view = s->pcm.s16;
-        }
-        if (r != (int)DBT_SSC_FRAME_SAMPLES) {
-            clear_packet(s);
-            return DBT_INVALID;
-        }
-        s->pos = (uint16_t)(s->pos + n);
-        uint32_t ts = s->timestamp + (uint32_t)s->index * DBT_SSC_FRAME_SAMPLES;
-        ++s->index;
-        dbt_result_t result = d->hooks.pcm(d->hooks.context, view, DBT_SSC_FRAME_SAMPLES, &d->config, ts);
+        uint32_t ts = s->timestamp + (uint32_t)s->index * DBT_SSC_FRAME_SAMPLES + s->emitted;
+        dbt_result_t result = d->hooks.pcm(d->hooks.context, view, chunk, &d->config, ts);
         if (result != DBT_OK && result != DBT_PENDING) {
             clear_packet(s);
             return result;
         }
-        ++d->frames;
+        s->emitted = (uint16_t)(s->emitted + chunk);
+        if (s->emitted == DBT_SSC_FRAME_SAMPLES) {
+            s->emitted = 0;
+            ++s->index;
+            ++d->frames;
+        }
         if (result == DBT_PENDING) return result;
     }
     clear_packet(s);
@@ -193,7 +201,7 @@ static dbt_result_t media(dbt_codec_decoder_t *d, const dbt_avdtp_media_t *p, ui
     if (!packet_frames(&d->config, p->payload, p->size)) return DBT_INVALID; /* worker drops it and resets */
     s->packet = p->payload;
     s->size = p->size;
-    s->pos = s->index = 0;
+    s->pos = s->index = s->emitted = 0;
     s->timestamp = p->timestamp;
     return resume(d, now);
 }

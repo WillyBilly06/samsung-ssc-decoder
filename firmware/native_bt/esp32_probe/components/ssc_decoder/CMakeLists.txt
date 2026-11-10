@@ -25,6 +25,7 @@ set(ssc_units
 )
 idf_component_register(SRCS "${owned}/dbt_ssc_codec.c" ${ssc_units}
     INCLUDE_DIRS "${owned}" "${decoder}"
-    REQUIRES native_bt codec_core PRIV_REQUIRES heap)
+    REQUIRES native_bt codec_core PRIV_REQUIRES heap
+    LDFRAGMENTS "linker.lf")
 target_compile_options(${COMPONENT_LIB} PRIVATE -std=gnu11 -O2 -fwrapv -fsingle-precision-constant -fno-math-errno)
 set_source_files_properties(${ssc_units} PROPERTIES COMPILE_OPTIONS "-Wno-error")

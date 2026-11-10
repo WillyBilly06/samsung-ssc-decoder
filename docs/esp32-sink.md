@@ -34,13 +34,18 @@ again. A malformed packet is dropped and the decoder is reset.
 
 Nothing is allocated until the phone opens an SSC stream. Then:
 
-* the decoder state: about 44 KB in 6 blocks, the largest about 15 KB, so it fits a fragmented heap;
-* one frame of PCM (up to 6.9 KB for 32-bit stereo);
+* the decoder: 22,920 bytes in 3 blocks of at most 7.8 KB, so it fits a fragmented heap. Per-frame scratch
+  (band folding, FFT) shares one block, and the shapes are decoded into the output frame area;
+* no PCM copy: the adapter converts the decoded frame in pieces into the decoder's idle scratch
+  (`ssc_decode_frame` + `ssc_read_*`) and hands each piece to the audio output;
 * the queue of received packets.
 
-Together this is the codec's working set: **65,572 bytes** for SSC. All tables are `const` and stay in flash.
-Everything is freed when the stream closes or the phone switches codec. Heap measured on the board (original
-ESP32, no PSRAM):
+All tables are `const` and stay in flash. Everything is freed when the stream closes or the phone switches codec.
+The decoder's code runs from IRAM, because the flash cache otherwise loses it to the Bluetooth stack between
+frames.
+
+Heap measured on the board (original ESP32, no PSRAM) with the earlier 44 KB decoder. The current decoder needs
+about 21 KB less:
 
 | Moment | Free heap | Largest free block |
 |---|---|---|

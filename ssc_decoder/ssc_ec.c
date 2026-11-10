@@ -14,29 +14,9 @@
 #define EC_UINT_BITS   (8)
 #define BITRES         (3)
 
-static int ec_ilog(opus_uint32 v) { int r = 0; while (v) { r++; v >>= 1; } return r; }
-#define EC_ILOG(x) ec_ilog(x)
+#define EC_ILOG(x) ssc_ilog32(x)
 #define EC_MINI(a,b) ((a)<(b)?(a):(b))
-
-int ec_tell(ec_dec *_this) { return _this->nbits_total - EC_ILOG(_this->rng); }
-
-/* opus 1.1 ec_tell_frac (identical in SSC). */
-opus_uint32 ec_tell_frac(ec_dec *_this)
-{
-    opus_uint32 nbits, r;
-    int l, i;
-    nbits = (opus_uint32)_this->nbits_total << BITRES;
-    l = EC_ILOG(_this->rng);
-    r = _this->rng >> (l - 16);
-    for (i = BITRES; i-- > 0;) {
-        int b;
-        r = r * r >> 15;
-        b = (int)(r >> 16);
-        l = l << 1 | b;
-        r >>= b;
-    }
-    return nbits - l;
-}
+/* ec_tell and ec_tell_frac are inline in ssc_ec.h. */
 
 /* ---- entdec.c (opus 1.1, unchanged except for the EC_CODE_BITS value above) ---- */
 static int ec_read_byte(ec_dec *_this) {

@@ -98,11 +98,6 @@ void ssc_denormalise_bands(const short *eBands, const float *X, float *freq, con
 static const int ssc_factors_432[] = {4, 108, 4, 27, 3, 9, 3, 3, 3, 1};  /* (radix, remaining) pairs */
 static const int ssc_factors_54[]  = {2, 27, 3, 9, 3, 3, 3, 1};
 
-void ssc_imdct_init(ssc_imdct_state *st)
-{
-   memset(st, 0, sizeof(*st));
-}
-
 /* Recursive mixed-radix decimation-in-time forward DFT with dedicated radix-2/3/4 butterflies
  * (same structure and conventions as kiss_fft in libopus). out[k] = sum_n in[n*in_stride] exp(-2 pi i n k / N).
  * tw is the 432-point table exp(-2 pi i k / 432); twstride = 432 / N_full. Twiddle indices never exceed 432,
@@ -163,67 +158,87 @@ static void ssc_fft_work(ssc_cpx *out, const ssc_cpx *in, int fstride, int in_st
    }
 }
 
-/* One inverse MDCT block. X: coefficients with stride (1 long, 8 short). Writes yo[0 .. N2+108) = windowed
- * time signal for this block (to be overlap-added). isShort selects N=216 instead of 1728. */
-static void ssc_imdct_block(ssc_imdct_state *st, const float *X, int stride, int isShort, float *yo)
+/* DCT-IV core of one inverse MDCT block: u[j] = sum_k X[k] cos(pi/N2 (j+1/2)(k+1/2)), j < N2.
+ * X: coefficients with stride (1 long, 8 short). a, b: N2/2 complex each, distinct from each other and from X
+ * (b may be X itself once it is no longer needed: the FFT runs after the pre-twiddle has consumed X).
+ * u (N2 floats) may alias a, which is dead after the FFT. */
+static void ssc_dct4(const float *X, int stride, int isShort, ssc_cpx *a, ssc_cpx *b, float *u)
 {
    const int N2 = isShort ? SSC_SHORT_N : SSC_N;
    const int N4 = N2 >> 1;
-   const int Q = N2 >> 1;              /* N/4 of the full transform (= N4) */
-   const int pad = (N2 - SSC_OVERLAP) >> 1;
    const ssc_cpx *pre = isShort ? ssc_pre_short : ssc_pre_long;
    const ssc_cpx *post = isShort ? ssc_post_short : ssc_post_long;
-   int k, m;
-   /* DCT-IV: u[j] = sum_k X[k] cos(pi/N2 (j+1/2)(k+1/2)) */
+   int k;
    for (k = 0; k < N4; k++) {
       float re = X[(2 * k) * stride], im = X[(N2 - 1 - 2 * k) * stride];
-      st->a[k].r = re * pre[k].r - im * pre[k].i;
-      st->a[k].i = re * pre[k].i + im * pre[k].r;
+      a[k].r = re * pre[k].r - im * pre[k].i;
+      a[k].i = re * pre[k].i + im * pre[k].r;
    }
-   if (isShort) ssc_fft_work(st->b, st->a, 1, 1, ssc_factors_54, ssc_fft_tw, 8);
-   else         ssc_fft_work(st->b, st->a, 1, 1, ssc_factors_432, ssc_fft_tw, 1);
+   if (isShort) ssc_fft_work(b, a, 1, 1, ssc_factors_54, ssc_fft_tw, 8);
+   else         ssc_fft_work(b, a, 1, 1, ssc_factors_432, ssc_fft_tw, 1);
    for (k = 0; k < N4; k++) {
-      float zr = st->b[k].r * post[k].r - st->b[k].i * post[k].i;
-      float zi = st->b[k].r * post[k].i + st->b[k].i * post[k].r;
-      st->u[2 * k] = zr;
-      st->u[N2 - 1 - 2 * k] = -zi;
-   }
-   /* unfold DCT-IV -> IMDCT samples n = pad+m of the length-2*N2 output, and window */
-   for (m = 0; m < N2 + SSC_OVERLAP; m++) {
-      int n = pad + m;
-      float v, w;
-      if (n < Q)            v =  st->u[n + Q];
-      else if (n < 3 * Q)   v = -st->u[3 * Q - 1 - n];
-      else                  v = -st->u[n - 3 * Q];
-      if (m < SSC_OVERLAP)  w = ssc_window[m];
-      else if (m < N2)      w = 1.f;
-      else                  w = ssc_window[N2 + SSC_OVERLAP - 1 - m];
-      yo[m] = v * w;
+      float zr = b[k].r * post[k].r - b[k].i * post[k].i;
+      float zi = b[k].r * post[k].i + b[k].i * post[k].r;
+      u[2 * k] = zr;
+      u[N2 - 1 - 2 * k] = -zi;
    }
 }
 
+/* Unfolding DCT-IV -> windowed IMDCT samples. With Q = N2/2 and n = pad + m (pad = (N2-108)/2):
+ *    v[m] = u[n+Q] (n < Q),  -u[3Q-1-n] (n < 3Q),  -u[n-3Q] (otherwise);   y[m] = v[m] * w[m],  m < N2+108
+ * w = rising window over m < 108, 1 up to N2, falling window over the last 108.
+ *  long  (N2 = 864, pad = 378): m in [0,54) u[810+m]; [54,918) -u[917-m]; [918,972) -u[m-918]
+ *  short (N2 = 108, pad = 0):   m in [0,54) u[54+m];  [54,162) -u[161-m]; [162,216) -u[m-162]
+ * The loops below are split at these points; each sample gets exactly the product v * w it got before
+ * (w = 1 in the flat part, where v * 1 = v). */
+
+/* Short block: yo[0 .. 216). */
+static void ssc_unfold_short(const float *u, float *yo)
+{
+   int m;
+   for (m = 0; m < 54; m++)    yo[m] =  u[54 + m] * ssc_window[m];
+   for (m = 54; m < 108; m++)  yo[m] = -u[161 - m] * ssc_window[m];
+   for (m = 108; m < 162; m++) yo[m] = -u[161 - m] * ssc_window[215 - m];
+   for (m = 162; m < 216; m++) yo[m] = -u[m - 162] * ssc_window[215 - m];
+}
+
 /* Synthesis of one frame for one channel.
- *   freq      : 864 coefficients (long block) or 8 interleaved short blocks (freq[j*8+b]).
+ *   scratch   : SSC_SYNTH_SCRATCH_FLOATS of per-frame scratch.
+ *   io        : in: 864 coefficients (long block) or 8 interleaved short blocks (io[j*8+b]);
+ *               out: 864 output samples (16-bit PCM units, before postfilter).
  *   ola_mem   : 108-sample overlap memory of this channel (zero at start).
- *   out       : 864 output samples (16-bit PCM units, before postfilter).
  * Long and short frames can be mixed freely (same 108 overlap). */
-void ssc_synthesis_frame(ssc_imdct_state *st, const float *freq, int shortBlocks, float *ola_mem, float *out)
+void ssc_synthesis_frame(float *scratch, float *io, int shortBlocks, float *ola_mem)
 {
    int m, b;
-   float *y = st->y;
    if (!shortBlocks) {
-      ssc_imdct_block(st, freq, 1, 0, y);
+      /* pre-twiddle io -> scratch, FFT scratch -> io, post-twiddle io -> scratch (u), unfold u -> io + ola */
+      const float *u = scratch;
+      ssc_dct4(io, 1, 0, (ssc_cpx *)scratch, (ssc_cpx *)io, scratch);
+      for (m = 0; m < 54; m++)    io[m] =  u[810 + m] * ssc_window[m];
+      for (m = 54; m < 108; m++)  io[m] = -u[917 - m] * ssc_window[m];
+      for (m = 108; m < 864; m++) io[m] = -u[917 - m];
+      for (m = 0; m < SSC_OVERLAP; m++) io[m] += ola_mem[m];
+      for (m = 864; m < 918; m++) ola_mem[m - 864] = -u[917 - m] * ssc_window[971 - m];
+      for (m = 918; m < 972; m++) ola_mem[m - 864] = -u[m - 918] * ssc_window[971 - m];
    } else {
-      float blk[2 * SSC_SHORT_N];
-      memset(y, 0, sizeof(st->y));
+      /* y: overlap-add accumulator; per block: a, b (54 complex each), u (108); the block output blk
+       * (216) reuses a and b, which are dead by then. io is only read until the last block. */
+      float *y = scratch;
+      ssc_cpx *a = (ssc_cpx *)(scratch + SSC_N + SSC_OVERLAP);
+      ssc_cpx *bb = a + SSC_SHORT_N / 2;
+      float *u = (float *)(bb + SSC_SHORT_N / 2);
+      float *blk = (float *)a;
+      memset(y, 0, (SSC_N + SSC_OVERLAP) * sizeof(float));
       for (b = 0; b < SSC_NB_SHORT; b++) {
-         ssc_imdct_block(st, freq + b, SSC_NB_SHORT, 1, blk);
+         ssc_dct4(io + b, SSC_NB_SHORT, 1, a, bb, u);
+         ssc_unfold_short(u, blk);
          for (m = 0; m < 2 * SSC_SHORT_N; m++) y[b * SSC_SHORT_N + m] += blk[m];
       }
+      for (m = 0; m < SSC_OVERLAP; m++) y[m] += ola_mem[m];
+      memcpy(io, y, SSC_N * sizeof(float));
+      memcpy(ola_mem, y + SSC_N, SSC_OVERLAP * sizeof(float));
    }
-   for (m = 0; m < SSC_OVERLAP; m++) y[m] += ola_mem[m];
-   memcpy(out, y, SSC_N * sizeof(float));
-   memcpy(ola_mem, y + SSC_N, SSC_OVERLAP * sizeof(float));
 }
 
 /* ================================================================================================

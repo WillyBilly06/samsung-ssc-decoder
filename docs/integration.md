@@ -52,7 +52,7 @@ i2s_channel_write(tx, pcm, sizeof pcm, &written, portMAX_DELAY);   // 32-bit I2S
 
 * `ssc_decode_s32()` puts 16-bit full scale at `1 << 31`, so the output goes straight to a 32-bit I2S slot and keeps
   the 24-bit detail of HiFi/UHQ. For 16-bit output use `ssc_decode()`.
-* Memory: `ssc_decoder_create()` allocates about 44 KB in 6 blocks (the largest about 15 KB). Use
+* Memory: `ssc_decoder_create()` allocates about 23 KB in 3 blocks (the largest about 7.8 KB). Use
   `ssc_decoder_create_with_allocator()` to choose the heap, e.g. `heap_caps_malloc(size, MALLOC_CAP_INTERNAL)`.
   Create the decoder when a stream opens and destroy it when it closes, so it only uses RAM while SSC is playing.
 * CPU on an ESP32 at 240 MHz: about 4.5 ms per frame in every mode (25 % of a core at 44.1/48 kHz, 49 % at

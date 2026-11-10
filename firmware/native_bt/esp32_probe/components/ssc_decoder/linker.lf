@@ -1,0 +1,14 @@
+# Run the SSC decoder from IRAM: its ~14 KB of code is otherwise evicted from the 32 KB flash cache by the
+# Bluetooth stack between frames (measured: 7.9 ms instead of 4.7 ms per 44.1 kHz frame from flash).
+# noflash_text moves code only; the constant tables stay in flash (no DRAM cost).
+# ssc_alloc (once per frame) stays in flash to leave IRAM headroom.
+[mapping:ssc_decoder]
+archive: libssc_decoder.a
+entries:
+
+    ssc_bands (noflash_text)
+    ssc_cwrs (noflash_text)
+    ssc_decoder (noflash_text)
+    ssc_ec (noflash_text)
+    ssc_energy (noflash_text)
+    ssc_synth (noflash_text)

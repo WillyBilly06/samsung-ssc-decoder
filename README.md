@@ -1,6 +1,6 @@
 <div align="center">
 
-# Samsung Scalable Codec (SSC) Decoder
+# Samsung Scalable Codec (SSC) & Samsung Seamless Codec Decoder for ESP32 and C
 
 **An open-source decoder for Samsung Scalable Codec / Samsung Seamless Codec, the Bluetooth codec behind Galaxy Buds,
 plus ESP32 speaker firmware that a Galaxy phone streams SSC to.**
@@ -12,7 +12,8 @@ plus ESP32 speaker firmware that a Galaxy phone streams SSC to.**
 ![Bluetooth A2DP](https://img.shields.io/badge/Bluetooth-A2DP%20%2B%20AVRCP-0082FC.svg)
 
 [Quick start](#quick-start) · [Decoder API](#decoder-api) · [Use it in ESP-IDF](docs/integration.md) ·
-[ESP32 speaker](#esp32-speaker-firmware) · [Bitstream spec](docs/bitstream.md) · [A2DP details](docs/a2dp.md) · [FAQ](#faq)
+[ESP32 speaker](#esp32-speaker-firmware) · [Bitstream spec](docs/bitstream.md) · [A2DP details](docs/a2dp.md) · [FAQ](#faq) ·
+[Encoder](https://github.com/WillyBilly06/samsung-ssc-encoder)
 
 </div>
 
@@ -24,7 +25,7 @@ plus ESP32 speaker firmware that a Galaxy phone streams SSC to.**
 |---|---|
 | **Every SSC mode** | SSC 44.1 / 48 kHz 16-bit, **Seamless HiFi** 48 kHz 24-bit, **UHQ** 96 kHz 24-bit, all 14 bitrates (88 – 886 kbps) |
 | **Bit-exact parsing** | Every test frame ends at exactly the bit position Samsung's own encoder wrote |
-| **Small and portable** | Plain C99, no dependencies, ~44 KB RAM, tables in flash; runs on PCs and microcontrollers |
+| **Small and portable** | Plain C99, no dependencies, ~23 KB RAM, tables in flash; runs on PCs and microcontrollers |
 | **Real time on an ESP32** | Original ESP32 without PSRAM decodes UHQ 96 kHz using half of one core |
 | **Complete speaker firmware** | A2DP sink + AVRCP + I2S DAC with its own Bluetooth host stack; also LDAC, aptX, AAC, SBC, Opus |
 | **Builds from this repo** | ESP-IDF 6.1 is bundled; no other checkout needed |
@@ -227,7 +228,7 @@ advertise is in [docs/a2dp.md](docs/a2dp.md#what-to-advertise).
 <details>
 <summary><b>Does it run on ESP32-S3 / C3 or other MCUs?</b></summary>
 
-The decoder is portable C, uses single-precision floating point and needs ~44 KB of RAM. MCUs with an FPU
+The decoder is portable C, uses single-precision floating point and needs ~23 KB of RAM. MCUs with an FPU
 and similar speed should work, but only the original ESP32 has been tested. The firmware targets the original ESP32,
 because it is the only chip in the ESP32 family with Classic Bluetooth (needed for A2DP).
 </details>

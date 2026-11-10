@@ -41,9 +41,38 @@ typedef struct ec_dec {
     int error;
 } ec_dec;
 
+/* Number of significant bits of v (EC_ILOG; 0 for 0). The builtin maps to one instruction (NSAU on Xtensa,
+ * CLZ on ARM); the plain loop it replaces cost up to 24 iterations per ec_tell. */
+static inline int ssc_ilog32(opus_uint32 v) {
+#if defined(__GNUC__) || defined(__clang__)
+    return v ? 32 - __builtin_clz((unsigned)v) : 0;
+#else
+    int r = 0;
+    while (v) { r++; v >>= 1; }
+    return r;
+#endif
+}
+
 void ec_dec_init(ec_dec *d, unsigned char *buf, opus_uint32 storage);
-int ec_tell(ec_dec *d);
-opus_uint32 ec_tell_frac(ec_dec *d);
+
+static inline int ec_tell(ec_dec *d) { return d->nbits_total - ssc_ilog32(d->rng); }
+
+/* opus 1.1 ec_tell_frac (identical in SSC): bits used, in 1/8 bit. */
+static inline opus_uint32 ec_tell_frac(ec_dec *d) {
+    opus_uint32 nbits, r;
+    int l, i;
+    nbits = (opus_uint32)d->nbits_total << 3;
+    l = ssc_ilog32(d->rng);
+    r = d->rng >> (l - 16);
+    for (i = 3; i-- > 0;) {
+        int b;
+        r = r * r >> 15;
+        b = (int)(r >> 16);
+        l = l << 1 | b;
+        r >>= b;
+    }
+    return nbits - l;
+}
 unsigned ec_decode(ec_dec *d, unsigned ft);
 unsigned ec_decode_bin(ec_dec *d, unsigned bits);
 void ec_dec_update(ec_dec *d, unsigned fl, unsigned fh, unsigned ft);
